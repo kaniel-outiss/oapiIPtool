@@ -1555,17 +1555,39 @@ const _EMERG_PRIV = 'IPTOOL-EMERG-PRIVE-2025';
 const _PRIV_SEL   = 'IPTOOL-SEL-PRIVE-2025-FABRICE';  // sel privé — même valeur que l'outil licences
 const _PBKDF2_ITER = 100000;
 
-function _getOrCreateSerial(){
-  let s = localStorage.getItem('oapi_install_id');
+// Numéro de série STABLE : dérivé de l'appareil, plus tiré au hasard.
+// Un numéro déjà enregistré est conservé (activations existantes valables) ;
+// sinon il est recalculé à l'identique après réinstallation, mise à jour ou cache vidé.
+const _SERIAL_SALT = 'IPTOOL-SERIAL-STABLE-2026';
+let _serialCache = null;
+async function _stableDeviceId(){
+  try{
+    const D = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Device;
+    if(D && D.getId){ const r = await D.getId(); const id = r && (r.identifier || r.uuid); if(id) return 'cap:'+id; }
+  }catch(e){}
+  const n = navigator, s = screen || {};
+  const dims = [s.width||0, s.height||0].sort((x,y)=>x-y).join('x');
+  const ua = (n.userAgent||'').replace(/[0-9._]+/g,'');
+  let tz = ''; try{ tz = Intl.DateTimeFormat().resolvedOptions().timeZone||''; }catch(e){}
+  return ['fp', n.platform||'', n.hardwareConcurrency||0, n.deviceMemory||0, dims, s.colorDepth||0, tz, ua].join('|');
+}
+async function _initSerial(){
+  if(_serialCache) return _serialCache;
+  let s = null;
+  try{ s = localStorage.getItem('oapi_install_id'); }catch(e){}
   if(!s){
-    const arr = new Uint8Array(4);
-    crypto.getRandomValues(arr);
-    s = Array.from(arr).map(b=>b.toString(16).toUpperCase().padStart(2,'0')).join('').slice(0,4)
-      + '-'
-      + Array.from(arr).map(b=>((b+73)%256).toString(16).toUpperCase().padStart(2,'0')).join('').slice(0,4);
-    localStorage.setItem('oapi_install_id', s);
+    const b = await _pbkdf2(await _stableDeviceId(), _SERIAL_SALT, 1000, 4);
+    const hx = b.map(x=>x.toString(16).toUpperCase().padStart(2,'0')).join('');
+    s = hx.slice(0,4) + '-' + hx.slice(4,8);
+    try{ localStorage.setItem('oapi_install_id', s); }catch(e){}
   }
+  _serialCache = s;
   return s;
+}
+function _getOrCreateSerial(){
+  if(_serialCache) return _serialCache;
+  try{ const s = localStorage.getItem('oapi_install_id'); if(s){ _serialCache = s; return s; } }catch(e){}
+  return '…';
 }
 
 async function _pbkdf2(password, salt, iterations, keylen){
@@ -1616,7 +1638,7 @@ function lockShowStep(stepId){
 }
 
 async function lockInit(){
-  const serial = _getOrCreateSerial();
+  const serial = await _initSerial();
   document.querySelectorAll('#lockSerialDisplay,#lockSerialDisplay2').forEach(el=>el.textContent=serial);
   _initPinPads();
   const pinHash = localStorage.getItem('oapi_pin_hash');
